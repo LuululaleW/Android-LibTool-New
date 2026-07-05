@@ -89,8 +89,10 @@ struct ClassesTab
                       Il2CppObject *thiz = nullptr);
 
     void ShowCodePopup(MethodInfo *method);
+    void ShowBNMPopup(MethodInfo *method);
     void ShowGGPatchPopup(MethodInfo *method);
     std::string GenerateCppCode(MethodInfo *method);
+    std::string GenerateBNMCode(MethodInfo *method);
     std::string GenerateGGPatchCode(MethodInfo *method);
 
     const MethodParamList &getCachedParams(MethodInfo *method);

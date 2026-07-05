@@ -1426,7 +1426,15 @@ void ClassesTab::CodeView(Il2CppClass *klass, MethodInfo *method, const MethodPa
         ImGui::OpenPopup("CodeGeneratorPopup");
     }
 
+    ImGui::SameLine();
+
+    if (ImGui::Button("Auto Update BNM Hook"))
+    {
+        ImGui::OpenPopup("BNMGeneratorPopup");
+    }
+
     ShowCodePopup(method);
+    ShowBNMPopup(method);
 }
 
 void ClassesTab::HexView(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo,
@@ -1647,6 +1655,39 @@ void ClassesTab::AssemblyView(Il2CppClass *klass, MethodInfo *method, const Meth
     cs_close(&handle);
 }
 
+void ClassesTab::ShowBNMPopup(MethodInfo *method)
+{
+    static ImGuiIO &io = ImGui::GetIO();
+    ImGui::SetNextWindowSizeConstraints(ImVec2(io.DisplaySize.x * 0.8f, 0), ImVec2(io.DisplaySize.x * 0.95f, io.DisplaySize.y * 0.8f));
+    if (ImGui::BeginPopup("BNMGeneratorPopup"))
+    {
+        std::string code = GenerateBNMCode(method);
+
+        ImGui::Text("Generated Auto Update BNM Hook Code:");
+        ImGui::Separator();
+
+        ImGui::BeginChild("BNMCodeArea", ImVec2(ImGui::GetContentRegionAvail().x, 300 * ImGui::GetFont()->Scale));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(code.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("Copy to Clipboard", ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+        {
+            ImGui::SetClipboardText(code.c_str());
+            Tool::AddNotification("Success", "BNM code copied to clipboard!", true, 2.0f);
+        }
+
+        if (ImGui::Button("Close", ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
 void ClassesTab::ShowCodePopup(MethodInfo *method)
 {
     static ImGuiIO &io = ImGui::GetIO();
@@ -1822,6 +1863,158 @@ std::string ClassesTab::GenerateCppCode(MethodInfo *method)
     ss << "}\n\n";
 
     ss << "DobbyHook((void *)getAbsoluteAddress(targetLibName, 0x" << std::hex << std::uppercase << offset << "), (void *) " << safeMethodName << ", (void **) &old_" << safeMethodName << ");";
+
+    return ss.str();
+}
+
+std::string ClassesTab::GenerateBNMCode(MethodInfo *method)
+{
+    std::stringstream ss;
+    std::string methodName = method->getName();
+    auto klass = method->getClass();
+    std::string className = klass->getName();
+    std::string namespaceName = klass->getNamespace();
+
+    // Remove invalid characters for C++ variable name
+    std::string safeMethodName = methodName;
+    std::string charsToReplace = ".<>` ";
+    for (char c : charsToReplace) {
+        std::replace(safeMethodName.begin(), safeMethodName.end(), c, '_');
+    }
+
+    // In case the namespace is empty, we handle it as ""
+    std::string nsString = namespaceName.empty() ? "" : namespaceName;
+
+    auto convertType = [](Il2CppType* type) -> std::string {
+        std::string name = type->getName();
+        if (name == "System.Void") return "void";
+        if (name == "System.Boolean") return "bool";
+        if (name == "System.Byte") return "unsigned char";
+        if (name == "System.SByte") return "signed char";
+        if (name == "System.Int16") return "short";
+        if (name == "System.UInt16") return "unsigned short";
+        if (name == "System.Int32") return "int";
+        if (name == "System.UInt32") return "uint";
+        if (name == "System.Int64") return "long long";
+        if (name == "System.UInt64") return "ulong";
+        if (name == "System.Single") return "float";
+        if (name == "System.Double") return "double";
+        if (name == "System.String") return "void*"; // monoString* or similar if defined
+        if (type->isEnum()) return "int";
+        if (!type->isPrimitive()) return "void*";
+        return name;
+    };
+
+    std::string returnTypeName = convertType(method->getReturnType());
+    auto params = method->getParamsInfo();
+    bool isVoid = strcmp(method->getReturnType()->getName(), "System.Void") == 0;
+    int paramCount = (int)params.size();
+
+    ss << "// Auto Update Hook for " << className << "::" << methodName << "\n";
+    ss << "bool Is" << safeMethodName << " = false;\n";
+    ss << returnTypeName << " (*old_" << safeMethodName << ")(void* instance";
+    for (auto& p : params) ss << ", " << convertType(p.second) << " " << p.first;
+    ss << ");\n";
+
+    ss << returnTypeName << " " << safeMethodName << "(void* instance";
+    for (auto& p : params) ss << ", " << convertType(p.second) << " " << p.first;
+    ss << ") {\n";
+    ss << "\tif (instance != NULL) {\n";
+    ss << "\t\tif (Is" << safeMethodName << ") {\n";
+
+    auto &o = oMap[method];
+    std::string patchValue = o.text;
+    auto rawReturnType = method->getReturnType()->getName();
+
+    if (isVoid) {
+        if (patchValue == "NOP") {
+            ss << "\t\t\treturn;\n";
+        } else {
+            auto &callerParams = paramMap[method];
+            bool hasCallerValues = false;
+            for (int k = 0; k < (int)params.size(); k++) {
+                char paramKey[64]{0};
+                sprintf(paramKey, "%p%s%d", method, params[k].first, k);
+                if (callerParams.count(paramKey) && !callerParams[paramKey].value.empty()) {
+                    hasCallerValues = true;
+                    break;
+                }
+            }
+
+            if (hasCallerValues) {
+                ss << "\t\t\told_" << safeMethodName << "(instance";
+                for (int k = 0; k < (int)params.size(); k++) {
+                    char paramKey[64]{0};
+                    sprintf(paramKey, "%p%s%d", method, params[k].first, k);
+                    std::string val = params[k].first;
+                    if (callerParams.count(paramKey) && !callerParams[paramKey].value.empty()) {
+                        auto &cp = callerParams[paramKey];
+                        auto paramType = params[k].second;
+                        std::string typeName = paramType->getName();
+
+                        if (typeName == "System.Boolean") {
+                            val = (cp.value == "True" ? "true" : "false");
+                        } else if (typeName == "System.String") {
+                            val = "il2cpp_string_new(OBFUSCATE(\"" + cp.value + "\"))";
+                        } else if (!paramType->isPrimitive() && !paramType->isEnum()) {
+                            val = "NULL"; // Avoid hardcoded runtime addresses
+                        } else {
+                            val = cp.value;
+                        }
+                    }
+                    ss << ", " << val;
+                }
+                ss << ");\n";
+                ss << "\t\t\treturn;\n";
+            } else {
+                ss << "\t\t\t// Do something\n";
+            }
+        }
+    } else {
+        auto returnTypeObj = method->getReturnType();
+        if (!patchValue.empty()) {
+            if (strcmp(rawReturnType, "System.Boolean") == 0) {
+                ss << "\t\t\treturn " << (patchValue == "True" ? "true" : "false") << "; // true/false.\n";
+            } else if (strcmp(rawReturnType, "System.String") == 0) {
+                ss << "\t\t\treturn il2cpp_string_new(OBFUSCATE(\"" << patchValue << "\"));\n";
+            } else if (!returnTypeObj->isPrimitive() && !returnTypeObj->isEnum()) {
+                ss << "\t\t\treturn NULL;\n";
+            } else {
+                ss << "\t\t\treturn " << patchValue << ";\n";
+            }
+        } else {
+            if (callResults.count(method) && !callResults.at(method).empty()) {
+                std::string lastResult = callResults.at(method).back().first;
+                if (lastResult != "the call returned null") {
+                    if (strcmp(rawReturnType, "System.Boolean") == 0) {
+                        ss << "\t\t\treturn " << (lastResult == "true" || lastResult == "True" ? "true" : "false") << ";\n";
+                    } else if (strcmp(rawReturnType, "System.String") == 0) {
+                        ss << "\t\t\treturn il2cpp_string_new(OBFUSCATE(\"" << lastResult << "\"));\n";
+                    } else if (!returnTypeObj->isPrimitive() && !returnTypeObj->isEnum()) {
+                        ss << "\t\t\treturn NULL;\n";
+                    } else {
+                        ss << "\t\t\treturn " << lastResult << ";\n";
+                    }
+                } else {
+                    ss << "\t\t\t// return ...;\n";
+                }
+            } else {
+                ss << "\t\t\t// return ...;\n";
+            }
+        }
+    }
+
+    ss << "\t\t}\n";
+    ss << "\t}\n";
+    ss << "\treturn old_" << safeMethodName << "(instance";
+    for (size_t i = 0; i < params.size(); ++i) {
+        ss << ", " << params[i].first;
+    }
+    ss << ");\n";
+    ss << "}\n\n";
+
+    ss << "// Put this inside your hook init function (e.g., hack_thread)\n";
+    ss << "BNM::Class(\"" << nsString << "\", \"" << className << "\")->GetMethod(\"" << methodName << "\", " << paramCount << ")->Hook((void*) " << safeMethodName << ", (void **) &old_" << safeMethodName << ");\n";
 
     return ss.str();
 }
