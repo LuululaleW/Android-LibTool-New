@@ -96,7 +96,7 @@ namespace Frida
                         if (offset <= 0x1000)
                         {
                             char buffer[265];
-                            sprintf(buffer, "%s::%s+0x%" PRIxPTR, closestMethod->getClass()->getFullName().c_str(),
+                            snprintf(buffer, sizeof(buffer), "%s::%s+0x%" PRIxPTR, closestMethod->getClass()->getFullName().c_str(),
                                     closestMethod->getName(), offset);
                             // LOGD("%s::%s+0x%lx => %p", closestPtr->second->getClass()->getFullName().c_str(),
                             //      closestPtr->second->getName(), gap, (void *)closestPtr->first);
@@ -126,41 +126,45 @@ namespace Frida
         {
             auto hookerData = context->get_listener_function_data<HookerData>();
 
+            const char* name = nullptr;
+            const char* className = nullptr;
+            uintptr_t absAddress = 0;
+
             // Multiple threads can hit on_enter, int++ is not atomic
-            hookerMtx.lock();
-            hookerData->hitCount++;
-
-            if (hookerData->silent)
             {
-                hookerMtx.unlock();
-                return;
-            }
+                std::lock_guard guard(hookerMtx);
+                hookerData->hitCount++;
 
-            if (hookerData->backtracing)
-            {
-                // Backtracer might need the lock or be slow
-                Backtracer(context);
-            }
-
-            hookerData->time = 1.f;
-            auto method = hookerData->method;
-            auto name = method->getName();
-            auto className = method->getClass()->getName();
-            auto absAddress = method->getAbsAddress();
-            auto klass = method->getClass();
-
-            if (!Il2cpp::GetIsMethodStatic(method))
-            {
-                auto thiz = context->get_nth_argument<Il2CppObject *>(0);
-                if (thiz)
+                if (hookerData->silent)
                 {
-                    HookerData::collectSet[klass].emplace(thiz);
+                    return;
+                }
+
+                if (hookerData->backtracing)
+                {
+                    // Backtracer might need the lock or be slow
+                    Backtracer(context);
+                }
+
+                hookerData->time = 1.f;
+                auto method = hookerData->method;
+                name = method->getName();
+                className = method->getClass()->getName();
+                absAddress = method->getAbsAddress();
+                auto klass = method->getClass();
+
+                if (!Il2cpp::GetIsMethodStatic(method))
+                {
+                    auto thiz = context->get_nth_argument<Il2CppObject *>(0);
+                    if (thiz)
+                    {
+                        HookerData::collectSet[klass].emplace(thiz);
+                    }
                 }
             }
-            hookerMtx.unlock();
 
             char buffer[256]{0};
-            sprintf(buffer, "%p | %s::%s", (void *)absAddress, className, name);
+            snprintf(buffer, sizeof(buffer), "%p | %s::%s", (void *)absAddress, className, name);
 
             // CircularBuffer has its own lock
             if (!HookerData::visited.empty())

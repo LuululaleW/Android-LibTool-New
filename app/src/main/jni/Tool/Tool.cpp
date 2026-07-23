@@ -274,14 +274,14 @@ namespace Tool
             if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
             {
                 // Popups like the keypad need full access
-                sprintf(result, "0|0|%d|%d", (int)ImGui::GetIO().DisplaySize.x, (int)ImGui::GetIO().DisplaySize.y);
+                snprintf(result, sizeof(result), "0|0|%d|%d", (int)ImGui::GetIO().DisplaySize.x, (int)ImGui::GetIO().DisplaySize.y);
             }
             else
             {
                 ImGuiWindow *window = ImGui::FindWindowByName(OBFUSCATE("IL2CPP Tool v0.9 By mIsmanXP @ Platinmods.com | Discord : @cat.ll"));
                 if (window && !collapsed)
                 {
-                    sprintf(result, "%d|%d|%d|%d", (int)window->Pos.x, (int)window->Pos.y, (int)window->Size.x, (int)window->Size.y);
+                    snprintf(result, sizeof(result), "%d|%d|%d|%d", (int)window->Pos.x, (int)window->Pos.y, (int)window->Size.x, (int)window->Size.y);
                 }
             }
         }
@@ -432,7 +432,7 @@ namespace Tool
                                strncpy(filter, text.c_str(), sizeof(filter));
                                externalChanged = true;
                                searchStrings(filter);
-                           });
+                           }, true);
         }
         if (ImGui::Button("Refresh"))
         {
@@ -613,7 +613,7 @@ namespace Tool
                                catch (...)
                                {
                                }
-                           });
+                           }, true);
         }
         ImGui::EndDisabled();
 
@@ -896,7 +896,7 @@ namespace Tool
                 uint8_t *bytes = (uint8_t *)ptr + i * 16;
                 for (int j = 0; j < 16; j++)
                 {
-                    sprintf(buffer + j * 3, "%02X ", bytes[j]);
+                    snprintf(buffer + j * 3, sizeof(buffer) - j * 3, "%02X ", bytes[j]);
                 }
                 LOGD("%s", buffer);
             }
