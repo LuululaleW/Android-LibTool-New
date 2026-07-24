@@ -612,6 +612,7 @@ namespace Tool
                                }
                                catch (...)
                                {
+                                   AddNotification("Error", "Gagal membaca format angka batas fungsi (maxFunctions)", false);
                                }
                            }, true);
         }

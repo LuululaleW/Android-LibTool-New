@@ -578,13 +578,12 @@ void ClassesTab::CallerView(Il2CppClass *klass, MethodInfo *method, const Method
     if (!methodIsStatic && !thiz)
     {
         auto &thisParam = params["this"];
-        char thisLabel[128]{0};
-        snprintf(thisLabel, sizeof(thisLabel), "%s this", Il2cpp::GetClassType(klass)->getName());
+        std::string thisLabelStr = std::string(Il2cpp::GetClassType(klass)->getName()) + " this";
         if (!thisParam.value.empty())
         {
-            snprintf(thisLabel, sizeof(thisLabel), "%s = %s", thisLabel, thisParam.value.c_str());
+            thisLabelStr += " = " + thisParam.value;
         }
-        if (ImGui::Button(thisLabel))
+        if (ImGui::Button(thisLabelStr.c_str()))
         {
             ImGui::OpenPopup("ThisObjectSelector");
         }
@@ -612,14 +611,13 @@ void ClassesTab::CallerView(Il2CppClass *klass, MethodInfo *method, const Method
         snprintf(paramKey, sizeof(paramKey), "%p%s%d", method, name, k);
         auto &param = params[paramKey];
 
-        char buttonLabel[128]{0};
-        snprintf(buttonLabel, sizeof(buttonLabel), "%s %s", type->getName(), name);
+        std::string buttonLabelStr = std::string(type->getName()) + " " + name;
         if (!param.value.empty())
         {
-            snprintf(buttonLabel, sizeof(buttonLabel), "%s = %s", buttonLabel, param.value.c_str());
+            buttonLabelStr += " = " + param.value;
         }
         ImGui::PushID(k);
-        if (ImGui::Button(buttonLabel))
+        if (ImGui::Button(buttonLabelStr.c_str()))
         {
             bool isString = strcmp(type->getName(), "System.String") == 0;
             if (type->isPrimitive() || isString)
@@ -672,203 +670,394 @@ void ClassesTab::CallerView(Il2CppClass *klass, MethodInfo *method, const Method
         }
         ImGui::PopID();
     }
+    DrawCallerArgs(klass, method, paramsInfo, thiz);
+}
+
+void ClassesTab::DrawJsonItem(const std::string& key, const Json& value, Il2CppObject *currentObj, Paths& paths, Il2CppObject *rootObj, bool& doRefresh)
+{
+    if (value.is_object() || value.is_array())
+    {
+        if (value.is_array() && value.size() == 0)
+        {
+            ImGui::Text("%s = [Empty]", key.c_str());
+        }
+        else if (ImGui::Button(key.c_str(), ImVec2(key.length() <= 3 ? ImGui::GetContentRegionAvail().x - ImGui::GetStyle().FramePadding.x : 0, 0)))
+        {
+            try
+            {
+                paths.push_back(key);
+                dataMap[rootObj].first = rootObj->dump(paths);
+            }
+            catch (nlohmann::json::exception &e)
+            {
+                LOGE("Json exception %s", e.what());
+            }
+            catch (std::exception &e)
+            {
+                LOGE("Exception %s", e.what());
+            }
+        }
+    }
+    else if (value.is_string())
+    {
+        auto text = value.get<std::string>();
+        ImGui::Text("%s = %s", key.c_str(), text.c_str());
+        if (ImGui::IsItemClicked())
+        {
+            std::istringstream iss(key);
+            std::string type, val;
+            iss >> type >> val;
+            if (strcmp(type.c_str(), "String") == 0)
+            {
+                Keyboard::Open(
+                    text.c_str(),
+                    [type = std::move(type), val = std::move(val), currentObj, &doRefresh](const std::string &value)
+                    {
+                        LOGD("%s", value.c_str());
+                        auto f = currentObj->klass->getField(val.c_str());
+                        auto newStr = Il2cpp::NewString(value.c_str());
+                        Il2cpp::SetFieldValue(currentObj, f, newStr);
+                        doRefresh = true;
+                    },
+                    true);
+            }
+            else
+            {
+                auto field = currentObj->klass->getField(val.c_str());
+                auto fieldType = field->getType();
+                if (fieldType->isEnum())
+                {
+                    poper.Open(
+                        "EnumSelector",
+                        [fieldType, currentObj, field, &doRefresh](const std::string &result)
+                        {
+                            int value = fieldType->getClass()->getField(result.c_str())->getStaticValue<int>();
+                            Il2cpp::SetFieldValue(currentObj, field, &value);
+                            doRefresh = true;
+                        },
+                        fieldType);
+                }
+            }
+        }
+    }
+    else if (value.is_boolean())
+    {
+        ImGui::Text("%s = %s", key.c_str(), value.get<bool>() ? "True" : "False");
+        if (ImGui::IsItemClicked())
+        {
+            std::istringstream iss(key);
+            std::string _, val;
+            iss >> _ >> val;
+            poper.Open("BooleanSelector",
+                       [currentObj, val, &paths, rootObj, &doRefresh](const std::string &value)
+                       {
+                           bool b = value == "True";
+                           currentObj->setField(val.c_str(), (int)b);
+                           ensureIfValueType(currentObj, paths, rootObj);
+                           doRefresh = true;
+                       });
+        }
+    }
+    else if (value.is_number_float())
+    {
+        ImGui::Text("%s = %f", key.c_str(), value.get<float>());
+        if (ImGui::IsItemClicked())
+        {
+            std::istringstream iss(key);
+            std::string type, val;
+            iss >> type >> val;
+            Keyboard::Open(std::to_string(value.get<float>()).c_str(),
+                           [type, currentObj, val, &paths, rootObj, &doRefresh](const std::string &text)
+                           {
+                               try {
+                                   if (strcmp(type.c_str(), "Single") == 0)
+                                   {
+                                       float value = std::stof(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "Double") == 0)
+                                   {
+                                       double value = std::stod(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   ensureIfValueType(currentObj, paths, rootObj);
+                                   doRefresh = true;
+                               } catch (...) {
+                                   LOGE("Failed to parse float/double");
+                                   Tool::AddNotification("Error", "Gagal mem-parsing angka desimal (float/double)", false);
+                               }
+                           },
+                           true);
+        }
+    }
+    else if (value.is_number())
+    {
+        ImGui::Text("%s = %d", key.c_str(), value.get<int>());
+        if (ImGui::IsItemClicked())
+        {
+            std::istringstream iss(key);
+            std::string type, val;
+            iss >> type >> val;
+            Keyboard::Open(std::to_string(value.get<int>()).c_str(),
+                           [type, currentObj, val, &paths, rootObj, &doRefresh](const std::string &text)
+                           {
+                               try {
+                                   if (strcmp(type.c_str(), "Int16") == 0)
+                                   {
+                                       int16_t value = std::stoi(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "UInt16") == 0)
+                                   {
+                                       uint16_t value = std::stoi(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "Int32") == 0)
+                                   {
+                                       int32_t value = std::stoi(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "UInt32") == 0)
+                                   {
+                                       uint32_t value = std::stoul(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "Int64") == 0)
+                                   {
+                                       int64_t value = std::stoll(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   else if (strcmp(type.c_str(), "UInt64") == 0)
+                                   {
+                                       uint64_t value = std::stoull(text);
+                                       currentObj->setField(val.c_str(), value);
+                                   }
+                                   ensureIfValueType(currentObj, paths, rootObj);
+                                   doRefresh = true;
+                               } catch (...) {
+                                   LOGE("Failed to parse integer");
+                                   Tool::AddNotification("Error", "Gagal mem-parsing angka bulat (integer)", false);
+                               }
+                           },
+                           true);
+        }
+    }
+    else
+    {
+        ImGui::Text("Unk %s %s", key.c_str(), value.type_name());
+    }
+}
+
+void ClassesTab::DrawCallerArgs(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo, Il2CppObject *thiz)
+{
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(30, 200, 25, 128));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 200, 25, 255));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(30, 200, 25, 255));
     float btnWidth = ImGui::CalcTextSize("Generate C++ Code").x + ImGui::GetStyle().FramePadding.x * 2.0f;
     if (ImGui::Button("Call", ImVec2(btnWidth, 0)))
     {
-        auto paramsInfo = method->getParamsInfo();
-        auto params = paramMap[method];
-        auto arrayParams = (paramsInfo.size() > 0) ? new Il2CppObject *[paramsInfo.size()] : nullptr;
+        ExecCallerInvoke(klass, method, paramsInfo, thiz);
+    }
+    ImGui::PopStyleColor(3);
 
-        bool hasParams = true;
-        Il2CppObject *thisParam = nullptr;
-        if (!methodIsStatic && !thiz)
+    DisplayCallerResults(method);
+}
+
+void ClassesTab::ExecCallerInvoke(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo, Il2CppObject *thiz)
+{
+    bool methodIsStatic = Il2cpp::GetIsMethodStatic(method);
+    auto &params = paramMap[method];
+    auto arrayParams = (paramsInfo.size() > 0) ? new Il2CppObject *[paramsInfo.size()] : nullptr;
+
+    bool hasParams = true;
+    Il2CppObject *thisParam = nullptr;
+    if (!methodIsStatic && !thiz)
+    {
+        if (params["this"].value.empty())
         {
-            if (params["this"].value.empty())
-            {
-                hasParams = false;
-            }
-            else
-            {
-                thisParam = params["this"].object;
-                LOGD("this = %s", params["this"].value.c_str());
-            }
+            hasParams = false;
         }
-        else if (thiz)
+        else
         {
-            thisParam = thiz;
+            thisParam = params["this"].object;
+            LOGD("this = %s", params["this"].value.c_str());
         }
+    }
+    else if (thiz)
+    {
+        thisParam = thiz;
+    }
 
-        for (int k = 0; k < paramsInfo.size(); k++)
+    for (int k = 0; k < paramsInfo.size(); k++)
+    {
+        auto &[name, type] = paramsInfo[k];
+
+        char paramKey[64]{0};
+        snprintf(paramKey, sizeof(paramKey), "%p%s%d", method, name, k);
+        auto &param = params[paramKey];
+        LOGD("%s %s = %s", type->getName(), name, param.value.c_str());
+        if (!param.value.empty())
         {
-            auto &[name, type] = paramsInfo[k];
-
-            char paramKey[64]{0};
-            snprintf(paramKey, sizeof(paramKey), "%p%s%d", method, name, k);
-            auto &param = params[paramKey];
-            LOGD("%s %s = %s", type->getName(), name, param.value.c_str());
-            if (!param.value.empty())
-            {
-                try {
-                    if (strcmp(type->getName(), "System.Int32") == 0)
-                    {
-                        ValueType<int> value{std::stoi(param.value)};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.Int64") == 0)
-                    {
-                        ValueType<long> value{std::stol(param.value)};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.UInt32") == 0)
-                    {
-                        ValueType<unsigned int> value{static_cast<unsigned int>(std::stoul(param.value))};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.UInt64") == 0)
-                    {
-                        ValueType<unsigned long> value{std::stoul(param.value)};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.Single") == 0)
-                    {
-                        ValueType<float> value{std::stof(param.value)};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.Double") == 0)
-                    {
-                        ValueType<double> value{std::stod(param.value)};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (strcmp(type->getName(), "System.Boolean") == 0)
-                    {
-                        ValueType<int> value{param.value == "True" ? 1 : 0};
-                        auto boxedValue = value.box(type->getClass());
-                        arrayParams[k] = boxedValue;
-                    }
-                    else if (type->isEnum())
-                    {
-                        arrayParams[k] = type->getClass()
-                                             ->getField(param.value.c_str())
-                                             ->getStaticValue<ValueType<int>>()
-                                             .box(type->getClass());
-                    }
-                    else if (strcmp(type->getName(), "System.String") == 0)
-                    {
-                        arrayParams[k] = Il2cpp::NewString(param.value.c_str());
-                    }
-                    else if (param.object)
-                    {
-                        arrayParams[k] = param.object;
-                    }
-                    else
-                    {
-                        LOGD("Unhandled type: %s %s", type->getName(), name);
-                    }
-                } catch (...) {
-                    LOGE("Failed to parse param %s", name);
-                    hasParams = false;
-                    break;
-                }
-            }
-            else
-            {
-                hasParams = false;
-            }
-        }
-        if (hasParams)
-        {
-            Il2CppObject *result = nullptr;
-
-            if (strcmp(method->getName(), ".ctor") != 0 && thisParam &&
-                Il2cpp::GetClassType(thisParam->klass)->isValueType())
-            {
-                auto thizz = Il2cpp::GetUnboxedValue(thisParam);
-                result = Il2cpp::RuntimeInvokeConvertArgs(method, thizz, arrayParams, paramsInfo.size());
-            }
-            else
-            {
-                result = Il2cpp::RuntimeInvokeConvertArgs(method, thisParam, arrayParams, paramsInfo.size());
-            }
-            LOGPTR(result);
-            if (result && strcmp(method->getName(), ".ctor") != 0)
-            {
-                auto resultType = Il2cpp::GetClassType(result->klass);
-                if (resultType->isPrimitive())
+            try {
+                if (strcmp(type->getName(), "System.Int32") == 0)
                 {
-                    std::vector<uintptr_t> visited;
-                    auto j = result->dump(visited, 1);
-                    callResults.at(method).push_back(std::pair{j.begin().value().dump(), nullptr});
+                    ValueType<int> value{std::stoi(param.value)};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
                 }
-                else if (strcmp(resultType->getName(), "System.String") == 0)
+                else if (strcmp(type->getName(), "System.Int64") == 0)
                 {
-                    callResults.at(method).push_back({((Il2CppString *)result)->to_string(), nullptr});
+                    ValueType<long> value{std::stol(param.value)};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
                 }
-                else if (resultType->isEnum())
+                else if (strcmp(type->getName(), "System.UInt32") == 0)
                 {
-                    callResults.at(method).push_back(
-                        {result->invoke_method<Il2CppString *>("ToString")->to_string(), nullptr});
+                    ValueType<unsigned int> value{static_cast<unsigned int>(std::stoul(param.value))};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
+                }
+                else if (strcmp(type->getName(), "System.UInt64") == 0)
+                {
+                    ValueType<unsigned long> value{std::stoul(param.value)};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
+                }
+                else if (strcmp(type->getName(), "System.Single") == 0)
+                {
+                    ValueType<float> value{std::stof(param.value)};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
+                }
+                else if (strcmp(type->getName(), "System.Double") == 0)
+                {
+                    ValueType<double> value{std::stod(param.value)};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
+                }
+                else if (strcmp(type->getName(), "System.Boolean") == 0)
+                {
+                    ValueType<int> value{param.value == "True" ? 1 : 0};
+                    auto boxedValue = value.box(type->getClass());
+                    arrayParams[k] = boxedValue;
+                }
+                else if (type->isEnum())
+                {
+                    arrayParams[k] = type->getClass()
+                                         ->getField(param.value.c_str())
+                                         ->getStaticValue<ValueType<int>>()
+                                         .box(type->getClass());
+                }
+                else if (strcmp(type->getName(), "System.String") == 0)
+                {
+                    arrayParams[k] = Il2cpp::NewString(param.value.c_str());
+                }
+                else if (param.object)
+                {
+                    arrayParams[k] = param.object;
                 }
                 else
                 {
-                    if (resultType->isValueType())
-                    {
-                        Il2cpp::GC::KeepAlive(result); // does this actually work?
-                    }
-                    auto toString = result->klass->getMethod("ToString", 0);
-                    if (toString)
-                    {
-                        Il2CppString *str = nullptr;
-                        if (resultType->isValueType())
-                        {
-                            auto thizz = Il2cpp::GetUnboxedValue(result);
-                            // str = toString->invoke_static<Il2CppString *>(thizz);
-                            str = (Il2CppString *)Il2cpp::RuntimeInvokeConvertArgs(toString, thizz, nullptr, 0);
-                        }
-                        else
-                        {
-                            str = toString->invoke_static<Il2CppString *>(result);
-                        }
-                        if (str)
-                        {
-                            callResults.at(method).push_back({str->to_string(), result});
-                        }
-                        else
-                        {
-                            callResults.at(method).push_back({"the call returned null", result});
-                        }
-                    }
-                    else
-                    {
-                        char resultStr[16]{0};
-                        snprintf(resultStr, sizeof(resultStr), "%p", result);
-                        callResults.at(method).push_back({resultStr, result});
-                    }
+                    LOGD("Unhandled type: %s %s", type->getName(), name);
                 }
-                savedSet[resultType->getClass()].insert(result);
-                // setJsonObject(result);
-            }
-            else
-            {
-                callResults.at(method).push_back({"the call returned null", nullptr});
+            } catch (...) {
+                LOGE("Failed to parse param %s", name);
+                Tool::AddNotification("Error", "Gagal mem-parsing parameter: " + std::string(name), false);
+                hasParams = false;
+                break;
             }
         }
         else
         {
-            LOGE("Not all params are set!");
+            hasParams = false;
         }
-        if (arrayParams)
-            delete[] arrayParams;
     }
-    ImGui::PopStyleColor(3);
+
+    if (hasParams)
+    {
+        Il2CppObject *result = nullptr;
+
+        if (strcmp(method->getName(), ".ctor") != 0 && thisParam &&
+            Il2cpp::GetClassType(thisParam->klass)->isValueType())
+        {
+            auto thizz = Il2cpp::GetUnboxedValue(thisParam);
+            result = Il2cpp::RuntimeInvokeConvertArgs(method, thizz, arrayParams, paramsInfo.size());
+        }
+        else
+        {
+            result = Il2cpp::RuntimeInvokeConvertArgs(method, thisParam, arrayParams, paramsInfo.size());
+        }
+        LOGPTR(result);
+        if (result && strcmp(method->getName(), ".ctor") != 0)
+        {
+            auto resultType = Il2cpp::GetClassType(result->klass);
+            if (resultType->isPrimitive())
+            {
+                std::vector<uintptr_t> visited;
+                auto j = result->dump(visited, 1);
+                callResults.at(method).push_back(std::pair{j.begin().value().dump(), nullptr});
+            }
+            else if (strcmp(resultType->getName(), "System.String") == 0)
+            {
+                callResults.at(method).push_back({((Il2CppString *)result)->to_string(), nullptr});
+            }
+            else if (resultType->isEnum())
+            {
+                callResults.at(method).push_back(
+                    {result->invoke_method<Il2CppString *>("ToString")->to_string(), nullptr});
+            }
+            else
+            {
+                if (resultType->isValueType())
+                {
+                    Il2cpp::GC::KeepAlive(result);
+                }
+                auto toString = result->klass->getMethod("ToString", 0);
+                if (toString)
+                {
+                    Il2CppString *str = nullptr;
+                    if (resultType->isValueType())
+                    {
+                        auto thizz = Il2cpp::GetUnboxedValue(result);
+                        str = (Il2CppString *)Il2cpp::RuntimeInvokeConvertArgs(toString, thizz, nullptr, 0);
+                    }
+                    else
+                    {
+                        str = toString->invoke_static<Il2CppString *>(result);
+                    }
+                    if (str)
+                    {
+                        callResults.at(method).push_back({str->to_string(), result});
+                    }
+                    else
+                    {
+                        callResults.at(method).push_back({"the call returned null", result});
+                    }
+                }
+                else
+                {
+                    char resultStr[16]{0};
+                    snprintf(resultStr, sizeof(resultStr), "%p", result);
+                    callResults.at(method).push_back({resultStr, result});
+                }
+            }
+            savedSet[resultType->getClass()].insert(result);
+        }
+        else
+        {
+            callResults.at(method).push_back({"the call returned null", nullptr});
+        }
+    }
+    else
+    {
+        LOGE("Not all params are set!");
+    }
+    if (arrayParams)
+        delete[] arrayParams;
+}
+
+void ClassesTab::DisplayCallerResults(MethodInfo *method)
+{
     if (!callResults.at(method).empty())
     {
         ImGui::Separator();
@@ -888,15 +1077,6 @@ void ClassesTab::CallerView(Il2CppClass *klass, MethodInfo *method, const Method
             }
             ImGui::Separator();
         }
-        // ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(200, 30, 25, 128));
-        // ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(200, 30, 25,
-        // 255)); ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(200, 30, 25,
-        // 255)); if (ImGui::Button("Clear##CallResults",
-        //                   ImVec2(ImGui::GetIO().DisplaySize.x / 3.f, 0)))
-        // {
-        //     callResults.at(method).clear();
-        // }
-        // ImGui::PopStyleColor(3);
     }
 }
 
@@ -976,149 +1156,126 @@ void ClassesTab::PatcherView(Il2CppClass *klass, MethodInfo *method, const Metho
     }
     if (ImGui::BeginPopup("HookReturnValuePopup"))
     {
-        ImGui::Text("Change return value");
-        ImGui::PushID(type);
-        char label[64]{0};
-        bool isPatched = false;
-        {
-            std::lock_guard guard(oMapMtx);
-            isPatched = !o.text.empty();
-        }
+        DrawPatcherPopup(method, type, o);
+        ImGui::EndPopup();
+    }
+}
 
+void ClassesTab::DrawPatcherPopup(MethodInfo *method, Il2CppType* type, OriginalMethodBytes& o)
+{
+    ImGui::Text("Change return value");
+    ImGui::PushID(type);
+    char label[64]{0};
+    bool isPatched = false;
+    {
+        std::lock_guard guard(oMapMtx);
+        isPatched = !o.text.empty();
+    }
+
+    if (isPatched)
+    {
+        snprintf(label, sizeof(label), "%s", "Restore");
+    }
+    else
+    {
+        snprintf(label, sizeof(label), "%s", type->getName());
+    }
+    if (ImGui::Button(label))
+    {
         if (isPatched)
         {
-            snprintf(label, sizeof(label), "%s", "Restore");
+            std::lock_guard guard(oMapMtx);
+            memcpy(method->methodPointer, o.bytes.data(), o.bytes.size());
+            o.bytes.clear();
+            o.patchedBytes.clear();
+            o.text.clear();
         }
         else
         {
-            snprintf(label, sizeof(label), "%s", type->getName());
-        }
-        if (ImGui::Button(label))
-        {
-            if (isPatched)
+            if (strcmp(type->getName(), "System.Int16") == 0 || strcmp(type->getName(), "System.Int32") == 0 ||
+                strcmp(type->getName(), "System.Int64") == 0 || strcmp(type->getName(), "System.UInt16") == 0 ||
+                strcmp(type->getName(), "System.UInt32") == 0 || strcmp(type->getName(), "System.UInt64") == 0 ||
+                strcmp(type->getName(), "System.Single") == 0 || strcmp(type->getName(), "System.Boolean") == 0 ||
+                strcmp(type->getName(), "System.String") == 0)
             {
-                std::lock_guard guard(oMapMtx);
-                memcpy(method->methodPointer, o.bytes.data(), o.bytes.size());
-                o.bytes.clear();
-                o.patchedBytes.clear();
-                o.text.clear();
-            }
-            else
-            {
-                if (strcmp(type->getName(), "System.Int16") == 0 || strcmp(type->getName(), "System.Int32") == 0 ||
-                    strcmp(type->getName(), "System.Int64") == 0 || strcmp(type->getName(), "System.UInt16") == 0 ||
-                    strcmp(type->getName(), "System.UInt32") == 0 || strcmp(type->getName(), "System.UInt64") == 0 ||
-                    strcmp(type->getName(), "System.Single") == 0 || strcmp(type->getName(), "System.Boolean") == 0 ||
-                    strcmp(type->getName(), "System.String") == 0)
+                if (strcmp(type->getName(), "System.Boolean") == 0)
                 {
-                    if (strcmp(type->getName(), "System.Boolean") == 0)
-                    {
-                        poper.Open("BooleanSelector",
-                                   [method](const std::string &b)
+                    poper.Open("BooleanSelector",
+                               [method](const std::string &b)
+                               {
+                                   using namespace asmjit;
+                                   Patcher p{method};
+                                   bool value = b == "True";
+                                   p.movBool(value);
+                                   p.ret();
+
+                                   if (oMap[method].text.empty())
                                    {
-                                       using namespace asmjit;
-                                       Patcher p{method};
-                                       bool value = b == "True";
-                                       p.movBool(value);
-                                       p.ret();
-
-                                       if (oMap[method].text.empty())
-                                       {
-                                           oMap[method].patchedBytes = p.getCode();
-                                           auto backup = p.patch();
-                                           if (oMap[method].bytes.empty())
-                                               oMap[method].bytes = backup;
-                                           oMap[method].text = b;
-                                       }
-                                       else
-                                       {
-                                           LOGE("oMap.text is not empty for %s", method->getName());
-                                       }
-                                   });
-                    }
-                    else
-                    {
-                        auto typ = type;
-                        auto m = method;
-                        Keyboard::Open(
-                            [typ, method = m](const std::string &text)
-                            {
-                                auto isString = strcmp(typ->getName(), "System.String") == 0;
-                                if (text.empty())
-                                    return;
-
-                                auto type = typ;
-                                Patcher p{method};
-                                // auto &assembler = p.assembler;
-                                if (strcmp(type->getName(), "System.Int16") == 0)
-                                {
-                                    int16_t value = std::stoi(text);
-                                    p.movInt16(value);
-                                }
-                                else if (strcmp(type->getName(), "System.UInt16") == 0)
-                                {
-                                    unsigned short value = std::stoi(text);
-                                    p.movUInt16(value);
-                                }
-                                else if (strcmp(type->getName(), "System.Int32") == 0)
-                                {
-                                    int value{std::stoi(text)};
-                                    p.movInt32(value);
-                                }
-                                else if (strcmp(type->getName(), "System.UInt32") == 0)
-                                {
-                                    unsigned int value{static_cast<unsigned int>(std::stoul(text))};
-                                    p.movUInt32(value);
-                                }
-                                else if (strcmp(type->getName(), "System.Int64") == 0)
-                                {
-                                    long value{std::stol(text)};
-                                    p.movInt64(value);
-                                }
-                                else if (strcmp(type->getName(), "System.UInt64") == 0)
-                                {
-                                    unsigned long value{std::stoul(text)};
-                                    p.movUInt64(value);
-                                }
-                                else if (strcmp(type->getName(), "System.Single") == 0)
-                                {
-                                    float value = std::stof(text);
-                                    p.movFloat(value);
-                                }
-                                else if (isString)
-                                {
-                                    p.movPtr(Il2cpp::NewString(text.c_str()));
-                                }
-
-                                p.ret();
-
-                                if (oMap[method].text.empty())
-                                {
-                                    oMap[method].patchedBytes = p.getCode();
-                                    auto backup = p.patch();
-                                    if (oMap[method].bytes.empty())
-                                        oMap[method].bytes = backup;
-                                    oMap[method].text = text;
-                                }
-                                else
-                                {
-                                    LOGE("oMap.text is not empty for %s", method->getName());
-                                }
-                            },
-                            true);
-                    }
+                                       oMap[method].patchedBytes = p.getCode();
+                                       auto backup = p.patch();
+                                       if (oMap[method].bytes.empty())
+                                           oMap[method].bytes = backup;
+                                       oMap[method].text = b;
+                                   }
+                                   else
+                                   {
+                                       LOGE("oMap.text is not empty for %s", method->getName());
+                                   }
+                               });
                 }
-                else if (type->isEnum())
+                else
                 {
-                    poper.Open(
-                        "EnumSelector",
-                        [method, type](const std::string &result)
+                    auto typ = type;
+                    auto m = method;
+                    Keyboard::Open(
+                        [typ, method = m](const std::string &text)
                         {
-                            int value = type->getClass()->getField(result.c_str())->getStaticValue<int>();
+                            auto isString = strcmp(typ->getName(), "System.String") == 0;
+                            if (text.empty())
+                                return;
 
-                            using namespace asmjit;
+                            auto type = typ;
                             Patcher p{method};
-                            p.movInt16(value);
+                            if (strcmp(type->getName(), "System.Int16") == 0)
+                            {
+                                int16_t value = std::stoi(text);
+                                p.movInt16(value);
+                            }
+                            else if (strcmp(type->getName(), "System.UInt16") == 0)
+                            {
+                                unsigned short value = std::stoi(text);
+                                p.movUInt16(value);
+                            }
+                            else if (strcmp(type->getName(), "System.Int32") == 0)
+                            {
+                                int value{std::stoi(text)};
+                                p.movInt32(value);
+                            }
+                            else if (strcmp(type->getName(), "System.UInt32") == 0)
+                            {
+                                unsigned int value{static_cast<unsigned int>(std::stoul(text))};
+                                p.movUInt32(value);
+                            }
+                            else if (strcmp(type->getName(), "System.Int64") == 0)
+                            {
+                                long value{std::stol(text)};
+                                p.movInt64(value);
+                            }
+                            else if (strcmp(type->getName(), "System.UInt64") == 0)
+                            {
+                                unsigned long value{std::stoul(text)};
+                                p.movUInt64(value);
+                            }
+                            else if (strcmp(type->getName(), "System.Single") == 0)
+                            {
+                                float value = std::stof(text);
+                                p.movFloat(value);
+                            }
+                            else if (isString)
+                            {
+                                p.movPtr(Il2cpp::NewString(text.c_str()));
+                            }
+
                             p.ret();
 
                             if (oMap[method].text.empty())
@@ -1127,97 +1284,47 @@ void ClassesTab::PatcherView(Il2CppClass *klass, MethodInfo *method, const Metho
                                 auto backup = p.patch();
                                 if (oMap[method].bytes.empty())
                                     oMap[method].bytes = backup;
-                                oMap[method].text = result;
+                                oMap[method].text = text;
                             }
                             else
                             {
                                 LOGE("oMap.text is not empty for %s", method->getName());
                             }
                         },
-                        type);
+                        true);
                 }
             }
+            else if (type->isEnum())
+            {
+                poper.Open(
+                    "EnumSelector",
+                    [method, type](const std::string &result)
+                    {
+                        int value = type->getClass()->getField(result.c_str())->getStaticValue<int>();
+
+                        using namespace asmjit;
+                        Patcher p{method};
+                        p.movInt16(value);
+                        p.ret();
+
+                        if (oMap[method].text.empty())
+                        {
+                            oMap[method].patchedBytes = p.getCode();
+                            auto backup = p.patch();
+                            if (oMap[method].bytes.empty())
+                                oMap[method].bytes = backup;
+                            oMap[method].text = result;
+                        }
+                        else
+                        {
+                            LOGE("oMap.text is not empty for %s", method->getName());
+                        }
+                    },
+                    type);
+            }
         }
-        // if (ImGui::BeginPopup("BooleanSelector"))
-        // {
-        //     if (ImGui::Button("True"))
-        //     {
-        //         using namespace asmjit;
-        //         Patcher p{method};
-        //         p.movBool(true);
-        //         p.ret();
-
-        //         if (oMap[method].bytes.empty())
-        //         {
-        //             oMap[method].bytes = p.patch();
-        //             oMap[method].text = "True";
-        //         }
-        //         else
-        //         {
-        //             LOGE("oMap is not empty for %s", method->getName());
-        //         }
-
-        //         ImGui::CloseCurrentPopup();
-        //     }
-        //     if (ImGui::Button("False"))
-        //     {
-        //         using namespace asmjit;
-        //         Patcher p{method};
-        //         p.movBool(false);
-        //         p.ret();
-
-        //         if (oMap[method].bytes.empty())
-        //         {
-        //             oMap[method].bytes = p.patch();
-        //             oMap[method].text = "False";
-        //         }
-        //         else
-        //         {
-        //             LOGE("oMap is not empty for %s", method->getName());
-        //         }
-        //         ImGui::CloseCurrentPopup();
-        //     }
-        //     ImGui::EndPopup();
-        // }
-        // // ImGui::SetNextWindowSize(ImVec2(0, io.DisplaySize.y / 3.f));
-        // ImGui::SetNextWindowSizeConstraints(ImVec2(-1, 0.f), ImVec2(-1, io.DisplaySize.y / 3.f));
-        // if (ImGui::BeginPopup("EnumSelector")) // assume the current type is enum
-        // {
-        //     auto klass = type->getClass();
-        //     for (auto field : klass->getFields())
-        //     {
-        //         auto fieldType = field->getType();
-        //         if (Il2cpp::GetTypeIsStatic(fieldType) ||
-        //             Il2cpp::GetFieldFlags(field) & FIELD_ATTRIBUTE_STATIC)
-        //         {
-        //             auto fieldName = field->getName();
-        //             if (ImGui::Button(fieldName))
-        //             {
-        //                 int value = type->getClass()->getField(fieldName)->getStaticValue<int>();
-
-        //                 using namespace asmjit;
-        //                 Patcher p{method};
-        //                 p.movInt16(value);
-        //                 p.ret();
-
-        //                 if (oMap[method].bytes.empty())
-        //                 {
-        //                     oMap[method].bytes = p.patch();
-        //                     oMap[method].text = fieldName;
-        //                 }
-        //                 else
-        //                 {
-        //                     LOGE("oMap is not empty for %s", method->getName());
-        //                 }
-        //                 ImGui::CloseCurrentPopup();
-        //             }
-        //         }
-        //     }
-        //     ImGui::EndPopup();
-        // }
-        ImGui::PopID();
-        ImGui::EndPopup();
     }
+    ImGui::PopID();
 }
     // if (ImGui::Button("Patch"))
     // {
@@ -1337,14 +1444,13 @@ bool ClassesTab::MethodViewer(Il2CppClass *klass, MethodInfo *method, const Meth
 
     bool methodIsStatic = Il2cpp::GetIsMethodStatic(method);
 
-    char treeLabel[512]{0};
-    snprintf(treeLabel, sizeof(treeLabel), "%s %s(%zu)###", method->getReturnType()->getName(), method->getName(), paramsInfo.size());
+    std::string treeLabelStr = std::string(method->getReturnType()->getName()) + " " + method->getName() + "(" + std::to_string(paramsInfo.size()) + ")###";
     int pushedColor = 0;
     if (methodIsStatic)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 100, 255));
         pushedColor++;
-        Util::prependStringToBuffer(treeLabel, "static ");
+        treeLabelStr = "static " + treeLabelStr;
     }
     bool hooked = false;
     int hitCount = 0;
@@ -1361,7 +1467,6 @@ bool ClassesTab::MethodViewer(Il2CppClass *klass, MethodInfo *method, const Meth
         patched = !oMap[method].text.empty();
     }
 
-    // sprintf(treeLabel, "%s##%p", treeLabel, method + j);
     if (zeroPointer)
     {
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 100, 100, 255));
@@ -1375,7 +1480,7 @@ bool ClassesTab::MethodViewer(Il2CppClass *klass, MethodInfo *method, const Meth
         {
             char hitLabel[64]{0};
             snprintf(hitLabel, sizeof(hitLabel), "Hit Count %d | ", hitCount);
-            Util::prependStringToBuffer(treeLabel, hitLabel);
+            treeLabelStr = std::string(hitLabel) + treeLabelStr;
         }
         else if (patched)
         {
@@ -1384,11 +1489,11 @@ bool ClassesTab::MethodViewer(Il2CppClass *klass, MethodInfo *method, const Meth
             {
                 char buff[64]{0};
                 snprintf(buff, sizeof(buff), "Returns %s | ", text.c_str());
-                Util::prependStringToBuffer(treeLabel, buff);
+                treeLabelStr = std::string(buff) + treeLabelStr;
             }
         }
     }
-    bool state = ImGui::TreeNode(treeLabel);
+    bool state = ImGui::TreeNode(treeLabelStr.c_str());
     if (state)
     {
         if (pushedColor)
@@ -2523,192 +2628,8 @@ void ClassesTab::ImGuiJson(Il2CppObject *rootObj)
 
         for (auto &[key, value] : current.items())
         {
-            // int count = 0;
-            if (value.is_object() || value.is_array())
-            {
-                if (value.is_array() && value.size() == 0)
-                {
-                    ImGui::Text("%s = [Empty]", key.c_str());
-                }
-                else if (ImGui::Button(key.c_str(), ImVec2(key.length() <= 3 ? ImGui::GetContentRegionAvail().x -
-                                                                                   ImGui::GetStyle().FramePadding.x
-                                                                             : 0,
-                                                           0)))
-                {
-                    try
-                    {
-                        paths.push_back(key);
-                        // LOGD("%s", object->dump(paths).dump().c_str());
-                        dataMap[rootObj].first = rootObj->dump(paths);
-                        break;
-                    }
-                    catch (nlohmann::json::exception &e)
-                    {
-                        LOGE("Json exception %s", e.what());
-                    }
-                    catch (std::exception &e)
-                    {
-                        LOGE("Exception %s", e.what());
-                    }
-                }
-            }
-            else if (value.is_string())
-            {
-                auto text = value.get<std::string>();
-                ImGui::Text("%s = %s", key.c_str(), text.c_str());
-                if (ImGui::IsItemClicked())
-                {
-                    std::istringstream iss(key);
-                    std::string type, val;
-                    iss >> type >> val;
-                    if (strcmp(type.c_str(), "String") == 0)
-                    {
-                        Keyboard::Open(
-                            text.c_str(),
-                            [type = std::move(type), val = std::move(val), currentObj](const std::string &value)
-                            {
-                                LOGD("%s", value.c_str());
-                                auto f = currentObj->klass->getField(val.c_str());
-                                auto newStr = Il2cpp::NewString(value.c_str());
-                                // Il2cpp::SetFieldValueObject(currentObj, f, newStr);
-                                Il2cpp::SetFieldValue(currentObj, f, newStr);
-                                doRefresh = true;
-                            },
-                            true);
-                    }
-                    else
-                    {
-                        auto field = currentObj->klass->getField(val.c_str());
-                        auto fieldType = field->getType();
-                        if (fieldType->isEnum())
-                        {
-                            poper.Open(
-                                "EnumSelector",
-                                [fieldType, currentObj, field](const std::string &result)
-                                {
-                                    int value = fieldType->getClass()->getField(result.c_str())->getStaticValue<int>();
-                                    Il2cpp::SetFieldValue(currentObj, field, &value);
-                                    doRefresh = true;
-                                },
-                                fieldType);
-                        }
-                    }
-                }
-            }
-            else if (value.is_boolean())
-            {
-                ImGui::Text("%s = %s", key.c_str(), value.get<bool>() ? "True" : "False");
-                if (ImGui::IsItemClicked())
-                {
-                    std::istringstream iss(key);
-                    std::string _, val;
-                    iss >> _ >> val;
-                    poper.Open("BooleanSelector",
-                               [currentObj, val, &paths, rootObj](const std::string &value)
-                               {
-                                   bool b = value == "True";
-                                   // split key by space
-                                   currentObj->setField(val.c_str(), (int)b);
-                                   ensureIfValueType(currentObj, paths, rootObj);
-                                   doRefresh = true;
-                               });
-                }
-            }
-            else if (value.is_number_float())
-            {
-                ImGui::Text("%s = %f", key.c_str(), value.get<float>());
-
-                if (ImGui::IsItemClicked())
-                {
-                    std::istringstream iss(key);
-                    std::string type, val;
-                    iss >> type >> val;
-                    Keyboard::Open(std::to_string(value.get<float>()).c_str(),
-                                   [type, currentObj, val, &paths, rootObj](const std::string &text)
-                                   {
-                                       try {
-                                           if (strcmp(type.c_str(), "Single") == 0)
-                                           {
-                                               float value = std::stof(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "Double") == 0)
-                                           {
-                                               double value = std::stod(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           ensureIfValueType(currentObj, paths, rootObj);
-                                           doRefresh = true;
-                                       } catch (...) {
-                                           LOGE("Failed to parse float/double");
-                                       }
-                                   },
-                                   true);
-                }
-            }
-            else if (value.is_number())
-            {
-                ImGui::Text("%s = %d", key.c_str(), value.get<int>());
-                if (ImGui::IsItemClicked())
-                {
-                    std::istringstream iss(key);
-                    std::string type, val;
-                    iss >> type >> val;
-                    Keyboard::Open(std::to_string(value.get<int>()).c_str(),
-                                   [type, currentObj, val, &paths, rootObj](const std::string &text)
-                                   {
-                                       try {
-                                           if (strcmp(type.c_str(), "Int16") == 0)
-                                           {
-                                               int16_t value = std::stoi(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "UInt16") == 0)
-                                           {
-                                               uint16_t value = std::stoi(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "Int32") == 0)
-                                           {
-                                               int32_t value = std::stoi(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "UInt32") == 0)
-                                           {
-                                               uint32_t value = std::stoul(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "Int64") == 0)
-                                           {
-                                               int64_t value = std::stoll(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           else if (strcmp(type.c_str(), "UInt64") == 0)
-                                           {
-                                               uint64_t value = std::stoull(text);
-                                               currentObj->setField(val.c_str(), value);
-                                           }
-                                           ensureIfValueType(currentObj, paths, rootObj);
-                                           doRefresh = true;
-                                       } catch (...) {
-                                           LOGE("Failed to parse integer");
-                                       }
-                                   },
-                                   true);
-                }
-            }
-            else
-            {
-                ImGui::Text("Unk %s %s", key.c_str(), value.type_name());
-            }
-            // constexpr ImU32 colors[8] = {
-            //     IM_COL32(255,50,50,255),     IM_COL32(0, 255, 0, 255),   IM_COL32(0, 0, 255, 255),
-            //     IM_COL32(255, 255, 0, 255),   IM_COL32(255, 0, 255, 255), IM_COL32(0, 255, 255, 255),
-            //     IM_COL32(255, 255, 255, 255), IM_COL32(0, 0, 0, 255),
-            // };
-            // ImGui::PushStyleColor(ImGuiCol_Separator, colors[paths.size() % 8]);
+            DrawJsonItem(key, value, currentObj, paths, rootObj, doRefresh);
             ImGui::Separator();
-            // ImGui::PopStyleColor();
         }
 
         ImGui::ScrollWhenDraggingOnVoid();
