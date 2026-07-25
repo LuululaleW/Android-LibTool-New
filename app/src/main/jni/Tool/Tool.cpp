@@ -274,14 +274,14 @@ namespace Tool
             if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
             {
                 // Popups like the keypad need full access
-                snprintf(result, sizeof(result), "0|0|%d|%d", (int)ImGui::GetIO().DisplaySize.x, (int)ImGui::GetIO().DisplaySize.y);
+                sprintf(result, "0|0|%d|%d", (int)ImGui::GetIO().DisplaySize.x, (int)ImGui::GetIO().DisplaySize.y);
             }
             else
             {
                 ImGuiWindow *window = ImGui::FindWindowByName(OBFUSCATE("IL2CPP Tool v0.9 By mIsmanXP @ Platinmods.com | Discord : @cat.ll"));
                 if (window && !collapsed)
                 {
-                    snprintf(result, sizeof(result), "%d|%d|%d|%d", (int)window->Pos.x, (int)window->Pos.y, (int)window->Size.x, (int)window->Size.y);
+                    sprintf(result, "%d|%d|%d|%d", (int)window->Pos.x, (int)window->Pos.y, (int)window->Size.x, (int)window->Size.y);
                 }
             }
         }
@@ -407,7 +407,7 @@ namespace Tool
         };
         static SyncData data = {filter, &externalChanged};
 
-        if (ImGui::InputText("Search Text", filter, sizeof(filter), ImGuiInputTextFlags_CallbackAlways,
+        if (ImGui::InputText("Cari Teks", filter, sizeof(filter), ImGuiInputTextFlags_CallbackAlways,
                             [](ImGuiInputTextCallbackData *data)
                             {
                                 SyncData *s = (SyncData *)data->UserData;
@@ -432,7 +432,7 @@ namespace Tool
                                strncpy(filter, text.c_str(), sizeof(filter));
                                externalChanged = true;
                                searchStrings(filter);
-                           }, true);
+                           });
         }
         if (ImGui::Button("Refresh"))
         {
@@ -612,9 +612,8 @@ namespace Tool
                                }
                                catch (...)
                                {
-                                   AddNotification("Error", "Gagal membaca format angka batas fungsi (maxFunctions)", false);
                                }
-                           }, true);
+                           });
         }
         ImGui::EndDisabled();
 
@@ -897,7 +896,7 @@ namespace Tool
                 uint8_t *bytes = (uint8_t *)ptr + i * 16;
                 for (int j = 0; j < 16; j++)
                 {
-                    snprintf(buffer + j * 3, sizeof(buffer) - j * 3, "%02X ", bytes[j]);
+                    sprintf(buffer + j * 3, "%02X ", bytes[j]);
                 }
                 LOGD("%s", buffer);
             }

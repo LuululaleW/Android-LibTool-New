@@ -70,15 +70,11 @@ struct ClassesTab
 
     void CallerView(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo,
                     Il2CppObject *thiz = nullptr);
-    void DrawCallerArgs(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo, Il2CppObject *thiz);
-    void ExecCallerInvoke(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo, Il2CppObject *thiz);
-    void DisplayCallerResults(MethodInfo *method);
 
     bool isMethodHooked(MethodInfo *method);
 
     void PatcherView(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo,
                      Il2CppObject *thiz = nullptr);
-    void DrawPatcherPopup(MethodInfo *method, Il2CppType* type, OriginalMethodBytes& o);
 
     void HookerView(Il2CppClass *klass, MethodInfo *method, const MethodParamList &paramsInfo,
                     Il2CppObject *thiz = nullptr);
@@ -129,7 +125,6 @@ struct ClassesTab
     void DrawTabMap();
 
     void ImGuiJson(Il2CppObject *object);
-    void DrawJsonItem(const std::string& key, const Json& value, Il2CppObject *currentObj, Paths& paths, Il2CppObject *rootObj, bool& doRefresh);
 
     void FilterClasses(const std::string &filter);
 };
