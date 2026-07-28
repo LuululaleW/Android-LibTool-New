@@ -2060,9 +2060,9 @@ void ClassesTab::Draw(int index, bool closeable)
     char tabLabel[256];
     if (filter.empty())
     {
-        sprintf(tabLabel, "Classes");
+        sprintf(tabLabel, "Kelas");
         if (index >= 0)
-            sprintf(tabLabel, "Classes [%d]", index + 1);
+            sprintf(tabLabel, "Kelas [%d]", index + 1);
     }
     else
     {
@@ -2130,7 +2130,7 @@ void ClassesTab::Draw(int index, bool closeable)
                                FilterClasses(filter);
                            });
         }
-        ImGui::Text("Matches: %zu of %zu", filteredClasses.size(), classes.size());
+        ImGui::Text("Kecocokan: %zu dari %zu", filteredClasses.size(), classes.size());
 
         if (ImGui::Button("Filter Options"))
         {
@@ -2273,7 +2273,7 @@ void ClassesTab::Draw(int index, bool closeable)
                 filterByField = true;
                 FilterClasses(filter);
             }
-            if (ImGui::Checkbox("Show All Classes", &showAllClasses))
+            if (ImGui::Checkbox("Tampilkan Semua Kelas", &showAllClasses))
             {
                 FilterClasses(filter);
             }

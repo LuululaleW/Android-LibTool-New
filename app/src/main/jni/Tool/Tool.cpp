@@ -407,7 +407,7 @@ namespace Tool
         };
         static SyncData data = {filter, &externalChanged};
 
-        if (ImGui::InputText("Search Text", filter, sizeof(filter), ImGuiInputTextFlags_CallbackAlways,
+        if (ImGui::InputText("Cari Teks", filter, sizeof(filter), ImGuiInputTextFlags_CallbackAlways,
                             [](ImGuiInputTextCallbackData *data)
                             {
                                 SyncData *s = (SyncData *)data->UserData;
